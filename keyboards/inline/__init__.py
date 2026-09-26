@@ -1,1 +1,4 @@
-from . import buttons
+from .buttons import are_you_sure_markup
+from .registration import email_verification_inline_markup, confirm_registration_inline_markup
+from .profile import profile_inline_markup, edit_profile_menu_markup
+from .admin import admin_panel_markup

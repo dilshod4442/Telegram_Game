@@ -1,5 +1,14 @@
+import sys
 import asyncio
 from aiogram.client.default import DefaultBotProperties
+
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.middlewares.request_logging import logger
@@ -89,3 +98,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         logger.info("Bot stopped!")
+

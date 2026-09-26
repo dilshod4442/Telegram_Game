@@ -1,11 +1,14 @@
 from aiogram.filters import BaseFilter
-from aiogram.types import Message
+from aiogram.types import TelegramObject
 
 
 class IsBotAdminFilter(BaseFilter):
     def __init__(self, user_ids: list):
-        self.user_ids = user_ids
+        self.user_ids = [int(i) for i in user_ids if str(i).isdigit()]
 
-    async def __call__(self, message: Message) -> bool:
-        admin_ids_int = [int(id) for id in self.user_ids]
-        return int(message.from_user.id) in admin_ids_int
+    async def __call__(self, event: TelegramObject) -> bool:
+        from_user = getattr(event, "from_user", None)
+        if not from_user:
+            return False
+        return from_user.id in self.user_ids
+

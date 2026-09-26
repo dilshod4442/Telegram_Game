@@ -1,78 +1,87 @@
-# Aiogram New Template (aiogram 3)
+# 🤖 Telegram Bot с расширенной регистрацией и верификацией по Email
 
-### 1. Create virtual environment and install packages
-Windows
-```shell
-python -m venv venv && venv\bin\activate && pip install -r requirements.txt
+Современный и надежный Telegram-бот на базе **Aiogram 3.x** и **PostgreSQL** с полноценной системой регистрации, подтверждением Email через 6-значный проверочный код, авто-определением локации/города, удобным меню и админ-панелью.
+
+---
+
+## ✨ Основные возможности
+
+### 👤 Система регистрации (FSM):
+1. **Имя и Фамилия:** валидация, поддержка пропуска фамилии.
+2. **Номер телефона:** отправка в 1 клик через кнопку `📱 Поделиться контактом` или ручной ввод с проверкой формата.
+3. **Email с подтверждением кодом:**
+   - Отправка красивого HTML-письма с 6-значным кодом безопасности.
+   - Ограничение по времени действия кода (10 минут).
+   - Кнопки «🔄 Отправить код повторно» (с антиспам кулдауном) и «✏️ Изменить email».
+   - Режим отладки (если SMTP не настроен, код отображается в чате для удобства тестирования).
+4. **Возраст / Дата рождения:** поддержка ввода числа или формата `ДД.ММ.ГГГГ`.
+5. **Пол:** удобный выбор кнопками `👨 Мужской` / `👩 Женский`.
+6. **Локация / Город:**
+   - Отправка геопозиции GPS с авто-определением города/адреса через Nominatim OpenStreetMap.
+   - Возможность ввести город текстом (например: `Ташкент`, `Москва`) для пользователей десктопного Telegram.
+7. **О себе (Био):** краткий рассказ об интересах/профессии (до 500 символов) или пропуск.
+8. **Карточка подтверждения:** предпросмотр всех данных перед сохранением в PostgreSQL.
+
+### 📱 Удобное меню и команды:
+- **Постоянное Reply-меню:**
+  - `👤 Мой профиль` — просмотр анкеты с меткой верификации Email и ссылкой на Google Maps.
+  - `✏️ Редактировать` — быстрое редактирование любого поля (имя, телефон, почта, возраст, пол, локация, био).
+  - `📍 Моя локация` — просмотр сохраненных координат и адреса.
+  - `ℹ️ О боте` — информация о системе и технологиях.
+  - `⚙️ Настройки` — статус аккаунта и уведомлений.
+  - `📞 Поддержка` — прямая ссылка на администратора.
+  - `👑 Админ-панель` — доступна только администраторам (`ADMINS`).
+
+- **Команды бота:**
+  - `/start` — приветствие и проверка статуса регистрации.
+  - `/register` — начать или перезапустить регистрацию.
+  - `/profile` — открыть профиль.
+  - `/edit` — редактировать поля анкеты.
+  - `/help` — подробный справочник команд.
+  - `/cancel` — отмена текущего шага / действия.
+
+### 👑 Панель администратора:
+- `📊 Статистика` — количество пользователей, завершенных регистраций и подтвержденных email.
+- `📥 Выгрузка в Excel` — генерация таблицы `.xlsx` со всеми полями пользователей.
+- `📢 Рассылка` — отправка любого сообщения (текст, фото, видео) всем пользователям.
+- `🗑 Очистить базу` — безопасная очистка с подтверждением.
+
+---
+
+## 🚀 Настройка и запуск
+
+### 1. Установка зависимостей
+```bash
+pip install -r requirements.txt
 ```
 
-Linux/Mac
-```shell
-python3 -m venv venv && source venv/bin/activate && pip3 install -r requirements.txt
+### 2. Настройка файла `.env`
+Откройте файл `.env` и укажите необходимые параметры:
+```env
+ADMINS=5786425491
+BOT_TOKEN=ваш_токен_бота
+
+# PostgreSQL
+DB_USER=postgres
+DB_PASS=1234
+DB_NAME=tg_bot
+DB_HOST=localhost
+
+# Настройки SMTP для отправки кодов на Email
+# Пример для Gmail (используйте "Пароль приложения" myaccount.google.com/apppasswords):
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USER=your_email@gmail.com
+SMTP_PASS=xxxx xxxx xxxx xxxx
+SMTP_USE_SSL=True
+SMTP_FROM=your_email@gmail.com
+SMTP_FROM_NAME="Telegram Bot"
 ```
 
-### 2. Create .env file and copy all variables from .env_example to it and customize your self (if needed)
+> **Примечание:** Если параметры SMTP оставить пустыми, бот автоматически перейдет в **режим разработки** и покажет сгенерированный проверочный код прямо в Telegram, чтобы вы могли протестировать регистрацию без почтового сервера!
 
-### 3. Run app.py
-Windows
-```shell
+### 3. Запуск бота
+```bash
 python app.py
 ```
-Linux/Mac
-```shell
-python3 app.py
-```
-
-# Set up Postgresql on server
-
-### 1. Install postgresql (if needed)
-```shell
-sudo apt install -y postgresql postgresql-contrib
-```
-
-### 2. Log in to the postgresql shell
-```shell
-sudo -u postres psql
-```
-
-### 3. Create a database (in postgresql shell)
-```shell
-CREATE DATABASE database_name WITH template = template0 ENCODING 'UTF8' LC_CTYPE 'C' LC_COLLATE 'C';
-```
-
-### 4. Create a user (in postgresql shell)
-```shell
-CREATE USER user_name WITH PASSWORD 'password';
-```
-
-### 5. Set encoding (in postgresql shell)
-```shell
-ALTER ROLE user_name SET client_encoding TO 'utf8';
-```
-
-### 6. Restrict transactions from an unexpected db user (in postgresql shell)
-```shell
-ALTER ROLE user_name SET default_transaction_isolation TO 'read committed';
-```
-
-### 7. Set timezone (in postgresql shell)
-```shell
-ALTER ROLE user_name SET timezone TO 'UTC';
-```
-> **_Note:_**  If you use another timezone in your project, replace **'UTC'** with yours.
-
-### 8. Grant the user the right to manage the db (in postgresql shell)
-```shell
-GRANT ALL PRIVILEGES ON DATABASE database_name TO user_name;
-```
-
-### 9. Quit postgresql (in postgresql shell)
-```shell
-\q
-```
-
-## If you have questions for this project, join and ask our community: https://t.me/+Wu3loL2thM8yZDMy
-
-<p align="center">
-<img style="width: 60%;" src="https://i.postimg.cc/nzykWKNd/result.gif">
-</p>
+Таблицы и столбцы в PostgreSQL создаются и мигрируются автоматически при старте.

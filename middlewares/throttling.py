@@ -18,7 +18,7 @@ class ThrottlingMiddleware(BaseMiddleware):
         last_request_time = self.user_timeouts.get(user_id, 0)
         if current_time - last_request_time < self.slow_mode_delay:
             # Agar so'rovlar juda tez-tez bo'lsa, sekin rejimni yoqish
-            await event.reply("Juda ko'p so'rov! Biroz kuting.")
+            await event.reply("Слишком много запросов! Пожалуйста, подождите немного.")
             return
         
         else:
