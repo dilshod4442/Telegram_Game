@@ -5,27 +5,43 @@ from typing import Optional
 
 from data import config
 
+
 logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# GEMINI
+# GEMINI SETTINGS
 # ============================================================
 
-GEMINI_MODEL = "gemini-3.7-flash"
-GEMINI_MAX_ATTEMPTS = 3
+# Модели идут по порядку.
+# Если первая временно недоступна — пробуем следующую.
+GEMINI_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+]
+
+# Сколько раз пробовать одну модель
+GEMINI_ATTEMPTS_PER_MODEL = 2
+
+# Сколько секунд ждать между попытками
+GEMINI_RETRY_DELAY = 2
 
 
-async def generate_gemini_response(prompt: str) -> Optional[str]:
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
+def create_gemini_client():
     """
-    Отправляет запрос в Gemini с повторными попытками.
-
-    Если Gemini вернул ошибку 503 или другую временную ошибку,
-    бот попробует запрос ещё несколько раз.
+    Создаёт Gemini client.
     """
 
     if not config.GEMINI_API_KEY:
-        logger.warning("GEMINI_API_KEY не настроен")
+        logger.warning(
+            "GEMINI_API_KEY не настроен."
+        )
         return None
 
     try:
@@ -35,58 +51,139 @@ async def generate_gemini_response(prompt: str) -> Optional[str]:
             api_key=config.GEMINI_API_KEY
         )
 
+        return client
+
     except Exception as err:
         logger.error(
-            f"Не удалось создать Gemini client: {err}"
+            f"Ошибка создания Gemini client: {err}"
         )
+
         return None
 
-    for attempt in range(1, GEMINI_MAX_ATTEMPTS + 1):
-        try:
-            logger.info(
-                f"Запрос к Gemini: попытка "
-                f"{attempt}/{GEMINI_MAX_ATTEMPTS}"
-            )
 
-            # generate_content синхронный,
-            # поэтому запускаем его в отдельном потоке,
-            # чтобы не блокировать aiogram.
-            response = await asyncio.to_thread(
-                client.models.generate_content,
-                model=GEMINI_MODEL,
-                contents=prompt,
-            )
+# ============================================================
+# GEMINI REQUEST
+# ============================================================
 
-            if response and response.text:
+async def generate_gemini_response(
+    prompt: str
+) -> Optional[str]:
+    """
+    Отправляет запрос в Gemini.
+
+    Использует несколько моделей.
+    Если одна модель возвращает ошибку,
+    автоматически пробует следующую.
+
+    Также используется retry для временных ошибок 503/429.
+    """
+
+    client = create_gemini_client()
+
+    if client is None:
+        return None
+
+    # --------------------------------------------------------
+    # ПРОБУЕМ МОДЕЛИ ПО ОЧЕРЕДИ
+    # --------------------------------------------------------
+
+    for model in GEMINI_MODELS:
+
+        logger.info(
+            f"🤖 Пробуем Gemini модель: {model}"
+        )
+
+        # ----------------------------------------------------
+        # RETRY ДЛЯ ОДНОЙ МОДЕЛИ
+        # ----------------------------------------------------
+
+        for attempt in range(
+            1,
+            GEMINI_ATTEMPTS_PER_MODEL + 1
+        ):
+
+            try:
+
                 logger.info(
-                    f"Gemini успешно ответил с попытки {attempt}"
-                )
-                return response.text
-
-            logger.warning(
-                f"Gemini вернул пустой ответ. "
-                f"Попытка {attempt}/{GEMINI_MAX_ATTEMPTS}"
-            )
-
-        except Exception as err:
-            logger.warning(
-                f"Ошибка Gemini. "
-                f"Попытка {attempt}/{GEMINI_MAX_ATTEMPTS}: {err}"
-            )
-
-            # Если это была не последняя попытка,
-            # ждём перед повторным запросом.
-            if attempt < GEMINI_MAX_ATTEMPTS:
-                delay = 2 ** (attempt - 1)
-
-                logger.info(
-                    f"Повторная попытка через {delay} сек."
+                    f"Gemini {model}: "
+                    f"попытка "
+                    f"{attempt}/"
+                    f"{GEMINI_ATTEMPTS_PER_MODEL}"
                 )
 
-                await asyncio.sleep(delay)
+                # generate_content является синхронным
+                # методом SDK.
+                #
+                # Поэтому запускаем его в отдельном
+                # потоке, чтобы Telegram-бот
+                # не зависал во время запроса.
+                response = await asyncio.to_thread(
+                    client.models.generate_content,
+                    model=model,
+                    contents=prompt,
+                )
+
+                # ------------------------------------------------
+                # УСПЕШНЫЙ ОТВЕТ
+                # ------------------------------------------------
+
+                if response and response.text:
+
+                    logger.info(
+                        f"✅ Gemini успешно ответил. "
+                        f"Модель: {model}"
+                    )
+
+                    return response.text
+
+                logger.warning(
+                    f"⚠️ Gemini вернул пустой ответ. "
+                    f"Модель: {model}"
+                )
+
+            except Exception as err:
+
+                error_text = str(err)
+
+                logger.warning(
+                    f"❌ Ошибка Gemini.\n"
+                    f"Модель: {model}\n"
+                    f"Попытка: "
+                    f"{attempt}/"
+                    f"{GEMINI_ATTEMPTS_PER_MODEL}\n"
+                    f"Ошибка: {error_text}"
+                )
+
+                # --------------------------------------------
+                # ЕСЛИ ЕСТЬ ЕЩЁ ПОПЫТКА
+                # --------------------------------------------
+
+                if attempt < GEMINI_ATTEMPTS_PER_MODEL:
+
+                    logger.info(
+                        f"🔄 Повторяем запрос "
+                        f"через {GEMINI_RETRY_DELAY} сек."
+                    )
+
+                    await asyncio.sleep(
+                        GEMINI_RETRY_DELAY
+                    )
+
+        # ----------------------------------------------------
+        # МОДЕЛЬ НЕ ОТВЕТИЛА
+        # ----------------------------------------------------
+
+        logger.warning(
+            f"⚠️ Модель {model} недоступна. "
+            f"Переходим к следующей модели."
+        )
+
+    # --------------------------------------------------------
+    # ВСЕ МОДЕЛИ НЕ ОТВЕТИЛИ
+    # --------------------------------------------------------
 
     logger.error(
-        "Gemini не ответил после всех попыток"
+        "❌ Все Gemini модели недоступны."
     )
 
     return None
@@ -96,47 +193,76 @@ async def generate_gemini_response(prompt: str) -> Optional[str]:
 # PYTHON SYNTAX CHECK
 # ============================================================
 
-def check_python_syntax(code: str) -> dict:
+def check_python_syntax(
+    code: str
+) -> dict:
     """
-    Проверяет синтаксис Python-кода с помощью AST.
+    Проверяет синтаксис Python-кода
+    с помощью AST.
     """
 
     try:
+
         tree = ast.parse(code)
 
         warnings = []
 
+        # ----------------------------------------------------
+        # ПРОВЕРКА AST
+        # ----------------------------------------------------
+
         for node in ast.walk(tree):
 
-            # Проверяем mutable default arguments
-            if isinstance(node, ast.FunctionDef):
+            # -----------------------------------------------
+            # MUTABLE DEFAULT ARGUMENTS
+            # -----------------------------------------------
+
+            if isinstance(
+                node,
+                ast.FunctionDef
+            ):
 
                 for default in node.args.defaults:
 
                     if isinstance(
                         default,
-                        (ast.List, ast.Dict, ast.Set)
+                        (
+                            ast.List,
+                            ast.Dict,
+                            ast.Set
+                        )
                     ):
+
                         warnings.append(
                             f"⚠️ В функции "
                             f"<code>{node.name}</code> "
-                            f"используется изменяемый аргумент "
-                            f"по умолчанию (mutable default). "
+                            f"используется изменяемый "
+                            f"аргумент по умолчанию "
+                            f"(mutable default).\n"
                             f"Рекомендуется использовать "
                             f"<code>None</code>."
                         )
 
-            # Проверяем bare except
-            if isinstance(node, ast.ExceptHandler):
+            # -----------------------------------------------
+            # BARE EXCEPT
+            # -----------------------------------------------
+
+            if isinstance(
+                node,
+                ast.ExceptHandler
+            ):
 
                 if node.type is None:
+
                     warnings.append(
                         "⚠️ Использование "
-                        "'bare except:' перехватывает все "
-                        "исключения, включая KeyboardInterrupt. "
-                        "Рекомендуется указывать конкретный "
-                        "класс ошибки "
-                        "(например, Exception)."
+                        "'bare except:' "
+                        "перехватывает все исключения, "
+                        "включая KeyboardInterrupt.\n"
+                        "Рекомендуется указывать "
+                        "конкретный класс ошибки, "
+                        "например "
+                        "<code>Exception</code>."
                     )
 
         return {
@@ -150,7 +276,11 @@ def check_python_syntax(code: str) -> dict:
             "valid": False,
             "line": e.lineno,
             "offset": e.offset,
-            "text": e.text.strip() if e.text else "",
+            "text": (
+                e.text.strip()
+                if e.text
+                else ""
+            ),
             "msg": e.msg,
         }
 
@@ -159,13 +289,21 @@ def check_python_syntax(code: str) -> dict:
 # PYTHON CODE ANALYZER
 # ============================================================
 
-async def analyze_python_code(code: str) -> str:
+async def analyze_python_code(
+    code: str
+) -> str:
     """
     Анализирует Python-код пользователя.
 
-    Сначала выполняется локальная проверка AST.
-    Затем Gemini пытается сделать глубокий анализ.
+    Сначала выполняется локальная проверка
+    синтаксиса.
+
+    Затем Gemini делает глубокий анализ.
     """
+
+    # --------------------------------------------------------
+    # LOCAL AST CHECK
+    # --------------------------------------------------------
 
     syntax_res = check_python_syntax(code)
 
@@ -176,17 +314,33 @@ async def analyze_python_code(code: str) -> str:
     if config.GEMINI_API_KEY:
 
         prompt = (
-            "Ты профессиональный Senior Python-разработчик.\n\n"
+            "Ты профессиональный Senior "
+            "Python-разработчик.\n\n"
+
             "Проанализируй следующий Python-код.\n\n"
+
             "Твоя задача:\n"
-            "1. Найти синтаксические ошибки.\n"
-            "2. Найти логические ошибки.\n"
-            "3. Найти потенциальные баги.\n"
-            "4. Объяснить ошибки простым языком.\n"
-            "5. Показать исправленный вариант кода.\n"
-            "6. Если код правильный — объяснить, почему он работает.\n\n"
-            "Отвечай структурированно и понятно.\n\n"
-            f"Код:\n```python\n{code}\n```"
+
+            "1. Найди синтаксические ошибки.\n"
+
+            "2. Найди логические ошибки.\n"
+
+            "3. Найди потенциальные баги.\n"
+
+            "4. Объясни ошибки простым языком.\n"
+
+            "5. Покажи исправленный вариант кода.\n"
+
+            "6. Если код правильный — объясни, "
+            "почему он работает.\n\n"
+
+            "Отвечай структурированно "
+            "и понятно.\n\n"
+
+            f"Код:\n"
+            f"```python\n"
+            f"{code}\n"
+            f"```"
         )
 
         ai_response = await generate_gemini_response(
@@ -194,21 +348,34 @@ async def analyze_python_code(code: str) -> str:
         )
 
         if ai_response:
+
             return ai_response
 
     # --------------------------------------------------------
-    # LOCAL STATIC ANALYZER
+    # LOCAL ANALYSIS IF GEMINI FAILED
     # --------------------------------------------------------
 
     if not syntax_res["valid"]:
 
-        line = syntax_res.get("line")
-        offset = syntax_res.get("offset")
-        bad_text = syntax_res.get("text")
-        msg = syntax_res.get("msg")
+        line = syntax_res.get(
+            "line"
+        )
+
+        offset = syntax_res.get(
+            "offset"
+        )
+
+        bad_text = syntax_res.get(
+            "text"
+        )
+
+        msg = syntax_res.get(
+            "msg"
+        )
 
         return (
-            "❌ <b>Обнаружена синтаксическая ошибка "
+            "❌ <b>Обнаружена "
+            "синтаксическая ошибка "
             "(SyntaxError)!</b>\n\n"
 
             f"📍 <b>Строка:</b> "
@@ -225,18 +392,20 @@ async def analyze_python_code(code: str) -> str:
 
             "💡 <b>Совет по исправлению:</b>\n"
 
-            "• Проверьте наличие двоеточия "
-            "<code>:</code> после "
-            "<code>if</code>, "
+            "• Проверьте наличие "
+            "двоеточия <code>:</code> "
+            "после <code>if</code>, "
             "<code>def</code>, "
             "<code>for</code>, "
             "<code>while</code>, "
             "<code>class</code>\n"
 
-            "• Убедитесь, что все круглые, "
-            "квадратные и фигурные скобки закрыты\n"
+            "• Убедитесь, что все "
+            "круглые, квадратные и "
+            "фигурные скобки закрыты\n"
 
-            "• Проверьте правильность отступов "
+            "• Проверьте правильность "
+            "отступов "
             "(обычно 4 пробела)"
         )
 
@@ -246,7 +415,9 @@ async def analyze_python_code(code: str) -> str:
 
     warnings_str = ""
 
-    if syntax_res.get("warnings"):
+    if syntax_res.get(
+        "warnings"
+    ):
 
         warnings_str = (
             "\n\n"
@@ -266,9 +437,9 @@ async def analyze_python_code(code: str) -> str:
 
         f"{warnings_str}\n\n"
 
-        "💡 <i>Gemini временно недоступен, "
-        "поэтому выполнена локальная "
-        "проверка Python-кода.</i>"
+        "💡 <i>Gemini временно "
+        "недоступен, поэтому выполнена "
+        "локальная проверка Python-кода.</i>"
     )
 
 
@@ -281,7 +452,8 @@ async def ask_ai_assistant(
     user_name: str = "Пользователь"
 ) -> str:
     """
-    Обрабатывает вопросы пользователя через Gemini.
+    Обрабатывает вопрос пользователя
+    через Gemini.
     """
 
     # --------------------------------------------------------
@@ -290,26 +462,37 @@ async def ask_ai_assistant(
 
     if config.GEMINI_API_KEY:
 
-        sys_instruction = (
+        system_instruction = (
             "Ты дружелюбный, умный и полезный "
             "AI-ассистент в Telegram-боте.\n\n"
 
-            "Отвечай структурированно, грамотно "
-            "и понятно.\n"
+            "Отвечай структурированно, "
+            "грамотно и понятно.\n\n"
 
-            "Используй эмодзи там, где это уместно.\n"
+            "Используй эмодзи там, где "
+            "это уместно.\n\n"
 
             "Если пользователь спрашивает "
-            "о программировании — показывай код "
-            "и объясняй его.\n"
+            "о программировании — показывай "
+            "код и объясняй его.\n\n"
 
-            "Если вопрос сложный — разбивай ответ "
-            "на простые шаги."
+            "Если вопрос сложный — разбивай "
+            "ответ на простые шаги.\n\n"
+
+            "Не говори пользователю, что "
+            "ты не настоящий AI.\n\n"
+
+            "Не придумывай факты. Если "
+            "не уверен — честно скажи об этом."
         )
 
         prompt = (
-            f"{sys_instruction}\n\n"
-            f"Вопрос от {user_name}:\n"
+            f"{system_instruction}\n\n"
+
+            f"Имя пользователя: "
+            f"{user_name}\n\n"
+
+            f"Вопрос пользователя:\n"
             f"{query}"
         )
 
@@ -318,27 +501,36 @@ async def ask_ai_assistant(
         )
 
         if ai_response:
+
             return ai_response
 
-        # Gemini был настроен, но временно не ответил
+        # ----------------------------------------------------
+        # GEMINI НЕ ОТВЕТИЛ
+        # ----------------------------------------------------
+
         return (
-            "⚠️ <b>Gemini временно недоступен.</b>\n\n"
-            "Я попробовал отправить запрос "
-            "несколько раз, но сервис пока "
-            "не ответил.\n\n"
+            "⚠️ <b>AI временно перегружен.</b>\n\n"
+
+            "Я попробовал несколько Gemini-моделей, "
+            "но ни одна сейчас не ответила.\n\n"
+
             "🔄 Попробуйте отправить вопрос "
             "ещё раз через несколько секунд."
         )
 
     # --------------------------------------------------------
-    # FALLBACK БЕЗ GEMINI
+    # FALLBACK WITHOUT API KEY
     # --------------------------------------------------------
 
     q_low = query.lower()
 
+    # --------------------------------------------------------
+    # GREETING
+    # --------------------------------------------------------
+
     if any(
-        k in q_low
-        for k in [
+        word in q_low
+        for word in [
             "привет",
             "здравствуй",
             "кто ты",
@@ -347,19 +539,23 @@ async def ask_ai_assistant(
     ):
 
         return (
-            f"👋 Привет, {user_name}!\n\n"
+            f"👋 <b>Привет, {user_name}!</b>\n\n"
 
-            "Я встроенный интеллектуальный "
-            "ассистент бота.\n\n"
+            "Я встроенный AI-ассистент "
+            "твоего Telegram-бота.\n\n"
 
             "Я могу помочь с:\n"
             "🐍 Python\n"
-            "🤖 программированием\n"
-            "🎮 мини-играми\n"
+            "💻 программированием\n"
+            "🎮 играми\n"
             "⚔️ RPG-механиками\n"
             "💡 идеями для проектов\n"
-            "🧠 различными вопросами"
+            "🧠 разными вопросами"
         )
+
+    # --------------------------------------------------------
+    # PYTHON
+    # --------------------------------------------------------
 
     elif (
         "python" in q_low
@@ -368,27 +564,28 @@ async def ask_ai_assistant(
 
         return (
             "🐍 <b>Python</b> — "
-            "высокоуровневый язык программирования "
-            "с простым и читаемым синтаксисом.\n\n"
+            "высокоуровневый язык "
+            "программирования.\n\n"
 
             "Ты можешь отправить Python-код "
             "через кнопку:\n\n"
 
             "💻 <b>Проверка Python-кода</b>\n\n"
 
-            "Там бот проверит синтаксис "
-            "и найдёт распространённые ошибки."
+            "Бот проверит синтаксис "
+            "и распространённые ошибки."
         )
 
-    else:
+    # --------------------------------------------------------
+    # DEFAULT FALLBACK
+    # --------------------------------------------------------
 
-        return (
-            "🤖 <b>AI Assistant</b>\n\n"
+    return (
+        "🤖 <b>AI Assistant</b>\n\n"
 
-            "Сейчас нейросеть Gemini "
-            "не подключена.\n\n"
+        "Gemini API сейчас не настроен.\n\n"
 
-            "Для работы AI необходимо указать "
-            "<code>GEMINI_API_KEY</code> "
-            "в конфигурации."
-        )
+        "Добавьте "
+        "<code>GEMINI_API_KEY</code> "
+        "в переменные окружения."
+    )
