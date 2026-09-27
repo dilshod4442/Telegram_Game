@@ -13,183 +13,142 @@ logger = logging.getLogger(__name__)
 # GEMINI SETTINGS
 # ============================================================
 
-# Модели идут по порядку.
-# Если первая временно недоступна — пробуем следующую.
-GEMINI_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-]
+# Основная модель: стабильная GA-модель, которая у тебя уже
+# успешно отвечала в Railway.
+# Резервная: более лёгкая GA-модель для быстрого fallback.
+GEMINI_PRIMARY_MODEL = "gemini-3.6-flash"
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 
-# Сколько раз пробовать одну модель
-GEMINI_ATTEMPTS_PER_MODEL = 2
-
-# Сколько секунд ждать между попытками
-GEMINI_RETRY_DELAY = 2
+# Максимальное количество токенов ответа.
+# Ограничение уменьшает время генерации и не даёт AI
+# случайно генерировать огромные ответы.
+GEMINI_MAX_OUTPUT_TOKENS = 4096
 
 
 # ============================================================
 # GEMINI CLIENT
 # ============================================================
 
-def create_gemini_client():
-    """
-    Создаёт Gemini client.
-    """
+_gemini_client = None
+_gemini_client_lock = asyncio.Lock()
+
+
+async def get_gemini_client():
+    """Создаёт один общий Gemini client и переиспользует его."""
+    global _gemini_client
 
     if not config.GEMINI_API_KEY:
-        logger.warning(
-            "GEMINI_API_KEY не настроен."
-        )
+        logger.warning("GEMINI_API_KEY не настроен.")
         return None
 
-    try:
-        from google import genai
+    if _gemini_client is not None:
+        return _gemini_client
 
-        client = genai.Client(
-            api_key=config.GEMINI_API_KEY
-        )
+    async with _gemini_client_lock:
+        if _gemini_client is not None:
+            return _gemini_client
 
-        return client
+        try:
+            from google import genai
 
-    except Exception as err:
-        logger.error(
-            f"Ошибка создания Gemini client: {err}"
-        )
+            _gemini_client = genai.Client(
+                api_key=config.GEMINI_API_KEY
+            )
 
-        return None
+            logger.info("✅ Gemini client создан.")
+            return _gemini_client
+
+        except Exception as err:
+            logger.error(
+                f"❌ Ошибка создания Gemini client: {err}"
+            )
+            return None
 
 
 # ============================================================
 # GEMINI REQUEST
 # ============================================================
 
+async def _request_gemini(client, model: str, prompt: str) -> Optional[str]:
+    """Один быстрый запрос к указанной модели."""
+    try:
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=model,
+            contents=prompt,
+        )
+
+        if response and response.text:
+            logger.info(
+                f"✅ Gemini ответил. Модель: {model}"
+            )
+            return response.text.strip()
+
+        logger.warning(
+            f"⚠️ Gemini вернул пустой ответ. Модель: {model}"
+        )
+
+    except Exception as err:
+        logger.warning(
+            f"⚠️ Gemini {model} ошибка: {err}"
+        )
+
+    return None
+
+
 async def generate_gemini_response(
     prompt: str
 ) -> Optional[str]:
     """
-    Отправляет запрос в Gemini.
+    Быстрый запрос к Gemini.
 
-    Использует несколько моделей.
-    Если одна модель возвращает ошибку,
-    автоматически пробует следующую.
+    Сначала используется основная модель.
+    Если она недоступна, БЕЗ ожидания 2 секунд
+    сразу переключаемся на резервную модель.
 
-    Также используется retry для временных ошибок 503/429.
+    В отличие от старой версии здесь нет цепочки
+    из 4 моделей × 2 попытки, поэтому 503 не заставляет
+    пользователя ждать 10–20 секунд.
     """
 
-    client = create_gemini_client()
+    client = await get_gemini_client()
 
     if client is None:
         return None
 
-    # --------------------------------------------------------
-    # ПРОБУЕМ МОДЕЛИ ПО ОЧЕРЕДИ
-    # --------------------------------------------------------
+    # 1) Основная модель
+    response = await _request_gemini(
+        client,
+        GEMINI_PRIMARY_MODEL,
+        prompt,
+    )
 
-    for model in GEMINI_MODELS:
+    if response:
+        return response
 
-        logger.info(
-            f"🤖 Пробуем Gemini модель: {model}"
-        )
+    # 2) Мгновенный fallback
+    logger.info(
+        f"🔄 Переключение на резервную модель: "
+        f"{GEMINI_FALLBACK_MODEL}"
+    )
 
-        # ----------------------------------------------------
-        # RETRY ДЛЯ ОДНОЙ МОДЕЛИ
-        # ----------------------------------------------------
+    response = await _request_gemini(
+        client,
+        GEMINI_FALLBACK_MODEL,
+        prompt,
+    )
 
-        for attempt in range(
-            1,
-            GEMINI_ATTEMPTS_PER_MODEL + 1
-        ):
-
-            try:
-
-                logger.info(
-                    f"Gemini {model}: "
-                    f"попытка "
-                    f"{attempt}/"
-                    f"{GEMINI_ATTEMPTS_PER_MODEL}"
-                )
-
-                # generate_content является синхронным
-                # методом SDK.
-                #
-                # Поэтому запускаем его в отдельном
-                # потоке, чтобы Telegram-бот
-                # не зависал во время запроса.
-                response = await asyncio.to_thread(
-                    client.models.generate_content,
-                    model=model,
-                    contents=prompt,
-                )
-
-                # ------------------------------------------------
-                # УСПЕШНЫЙ ОТВЕТ
-                # ------------------------------------------------
-
-                if response and response.text:
-
-                    logger.info(
-                        f"✅ Gemini успешно ответил. "
-                        f"Модель: {model}"
-                    )
-
-                    return response.text
-
-                logger.warning(
-                    f"⚠️ Gemini вернул пустой ответ. "
-                    f"Модель: {model}"
-                )
-
-            except Exception as err:
-
-                error_text = str(err)
-
-                logger.warning(
-                    f"❌ Ошибка Gemini.\n"
-                    f"Модель: {model}\n"
-                    f"Попытка: "
-                    f"{attempt}/"
-                    f"{GEMINI_ATTEMPTS_PER_MODEL}\n"
-                    f"Ошибка: {error_text}"
-                )
-
-                # --------------------------------------------
-                # ЕСЛИ ЕСТЬ ЕЩЁ ПОПЫТКА
-                # --------------------------------------------
-
-                if attempt < GEMINI_ATTEMPTS_PER_MODEL:
-
-                    logger.info(
-                        f"🔄 Повторяем запрос "
-                        f"через {GEMINI_RETRY_DELAY} сек."
-                    )
-
-                    await asyncio.sleep(
-                        GEMINI_RETRY_DELAY
-                    )
-
-        # ----------------------------------------------------
-        # МОДЕЛЬ НЕ ОТВЕТИЛА
-        # ----------------------------------------------------
-
-        logger.warning(
-            f"⚠️ Модель {model} недоступна. "
-            f"Переходим к следующей модели."
-        )
-
-    # --------------------------------------------------------
-    # ВСЕ МОДЕЛИ НЕ ОТВЕТИЛИ
-    # --------------------------------------------------------
+    if response:
+        return response
 
     logger.error(
-        "❌ Все Gemini модели недоступны."
+        "❌ Основная и резервная Gemini-модели "
+        "не вернули ответ."
     )
 
     return None
 
 
-# ============================================================
 # PYTHON SYNTAX CHECK
 # ============================================================
 
