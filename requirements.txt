@@ -48,3 +48,4 @@ pyreadline3>=3.4.1
 
 # Database
 asyncpg==0.31.0
+google-genai
