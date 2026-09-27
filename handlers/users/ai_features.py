@@ -6,7 +6,7 @@ from aiogram.enums.parse_mode import ParseMode
 from states.features import AIState
 from utils.misc.ai_helper import ask_ai_assistant, analyze_python_code
 from keyboards.reply.registration import cancel_keyboard
-
+from html import escape
 router = Router()
 
 
@@ -125,7 +125,7 @@ async def process_code_check(message: types.Message, state: FSMContext):
 
     await state.clear()
     await message.answer(
-        f"💻 <b>Результат анализа кода:</b>\n\n{analysis}",
+        f"💻 <b>Результат анализа кода:</b>\n\n{escape(analysis)}",
         reply_markup=ai_menu_markup(),
         parse_mode=ParseMode.HTML,
     )
