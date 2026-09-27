@@ -80,7 +80,6 @@ async def process_ai_question(message: types.Message, state: FSMContext):
     except Exception:
         pass
 
-    await state.clear()
     await message.answer(
         f"🤖 <b>Ответ AI:</b>\n\n{reply}",
         reply_markup=ai_menu_markup(),
