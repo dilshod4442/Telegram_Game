@@ -47,7 +47,7 @@ async def analyze_python_code(code: str) -> str:
                 f"Код:\n```python\n{code}\n```"
             )
             response = client.models.generate_content(
-                model="gemini-3.8-flash",
+                model="gemini-3.7-flash",
                 contents=prompt,
             )
             if response and response.text:
@@ -95,7 +95,7 @@ async def ask_ai_assistant(query: str, user_name: str = "Пользовател�
                 "Отвечай структурированно, грамотно и кратко, используй эмодзи и форматирование."
             )
             response = client.models.generate_content(
-                model="gemini-3.8-flash",
+                model="gemini-3.7-flash",
                 contents=f"{sys_instruction}\n\nВопрос от {user_name}: {query}",
             )
             if response and response.text:
